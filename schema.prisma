@@ -1,0 +1,372 @@
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
+}
+datasource db {
+  provider = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// เงินทั้งหมดเก็บเป็นจำนวนเต็มหน่วยสตางค์ (Int) ห้ามใช้ Float
+
+enum StaffRole { OWNER ADMIN STAFF }
+enum OrderStatus { PENDING CONFIRMED IN_PROGRESS WAITING_CUSTOMER REVISION COMPLETED CANCELLED }
+enum PaymentStatus { UNPAID PENDING_VERIFICATION PARTIALLY_PAID PAID REJECTED REFUNDED }
+enum TicketType { ORDER PRICE_INQUIRY ISSUE CONTACT }
+enum TicketStatus { OPEN CLOSED }
+enum ModAction { WARN TIMEOUT UNTIMEOUT KICK BAN UNBAN PURGE }
+
+model User {
+  id          String   @id @default(cuid())
+  discordId   String   @unique
+  username    String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  orders      Order[]
+  tickets     Ticket[]
+  reviews     Review[]
+  payments    Payment[]
+  warnings    Warning[]
+  notifications Notification[]
+}
+
+model Guild {
+  id         String   @id @default(cuid())
+  discordId  String   @unique
+  name       String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  settings   GuildSettings?
+  welcome    WelcomeSettings?
+  staff      StaffMember[]
+  products   Product[]
+  orders     Order[]
+  tickets    Ticket[]
+  reviews    Review[]
+  cases      ModerationCase[]
+  rolePanels RolePanel[]
+  templates  EmbedTemplate[]
+  auditLogs  AuditLog[]
+}
+
+model GuildSettings {
+  id               String  @id @default(cuid())
+  guildId          String  @unique
+  guild            Guild   @relation(fields: [guildId], references: [id])
+  orderWebhook     String?
+  statusWebhook    String?
+  reviewWebhook    String?
+  logWebhook       String?
+  announceChannelId String?
+  ticketCategoryId String?
+  adminRoleId      String?
+  staffRoleId      String?
+  customerRoleId   String?
+  embedColor       Int     @default(9109504) // 0x8B0000
+  footerText       String?
+  imageUrl         String?
+  maxOpenTicketsPerUser Int @default(1)
+  shopOpen         Boolean @default(true)
+  paymentInfo      String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+}
+
+model StaffMember {
+  id        String    @id @default(cuid())
+  guildId   String
+  guild     Guild     @relation(fields: [guildId], references: [id])
+  discordId String
+  role      StaffRole
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+  assignedOrders Order[]
+  @@unique([guildId, discordId])
+}
+
+model Product {
+  id        String    @id @default(cuid())
+  guildId   String
+  guild     Guild     @relation(fields: [guildId], references: [id])
+  name      String
+  description String?
+  sortOrder Int       @default(0)
+  active    Boolean   @default(true)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+  packages  ProductPackage[]
+  @@index([guildId, active])
+}
+
+model ProductPackage {
+  id            String    @id @default(cuid())
+  productId     String
+  product       Product   @relation(fields: [productId], references: [id])
+  name          String
+  description   String?
+  priceSatang   Int
+  etaDays       Int?
+  coverUrl      String?
+  inclusions    String[]
+  isCustom      Boolean   @default(false)
+  sortOrder     Int       @default(0)
+  active        Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  deletedAt     DateTime?
+  orderItems    OrderItem[]
+  @@index([productId, active, sortOrder])
+}
+
+model Order {
+  id             String        @id @default(cuid())
+  orderNo        String        @unique
+  idempotencyKey String        @unique // เช่น interaction.id กันออเดอร์ซ้ำ
+  guildId        String
+  guild          Guild         @relation(fields: [guildId], references: [id])
+  customerId     String
+  customer       User          @relation(fields: [customerId], references: [id])
+  assigneeId     String?
+  assignee       StaffMember?  @relation(fields: [assigneeId], references: [id])
+  status         OrderStatus   @default(PENDING)
+  paymentStatus  PaymentStatus @default(UNPAID)
+  priceSatang    Int           @default(0)
+  paidSatang     Int           @default(0)
+  budgetSatang   Int?
+  details        String
+  referenceLinks String[]
+  dueDate        DateTime?
+  internalNote   String?
+  cancelReason   String?
+  version        Int           @default(0) // optimistic lock
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  deletedAt      DateTime?
+  items          OrderItem[]
+  history        OrderStatusHistory[]
+  tickets        Ticket[]
+  payments       Payment[]
+  review         Review?
+  messages       OrderMessage[]
+  @@index([guildId, status])
+  @@index([customerId])
+}
+
+model OrderItem {
+  id          String         @id @default(cuid())
+  orderId     String
+  order       Order          @relation(fields: [orderId], references: [id])
+  packageId   String
+  package     ProductPackage @relation(fields: [packageId], references: [id])
+  nameSnapshot String
+  priceSatang Int
+  quantity    Int            @default(1)
+}
+
+model OrderStatusHistory {
+  id         String      @id @default(cuid())
+  orderId    String
+  order      Order       @relation(fields: [orderId], references: [id])
+  fromStatus OrderStatus?
+  toStatus   OrderStatus
+  actorDiscordId String
+  note       String?
+  createdAt  DateTime    @default(now())
+  @@index([orderId])
+}
+
+model Ticket {
+  id         String       @id @default(cuid())
+  ticketNo   Int          @default(autoincrement())
+  guildId    String
+  guild      Guild        @relation(fields: [guildId], references: [id])
+  channelId  String?      @unique
+  customerId String
+  customer   User         @relation(fields: [customerId], references: [id])
+  orderId    String?
+  order      Order?       @relation(fields: [orderId], references: [id])
+  type       TicketType
+  status     TicketStatus @default(OPEN)
+  claimedByDiscordId String?
+  openedAt   DateTime     @default(now())
+  closedAt   DateTime?
+  closedByDiscordId String?
+  createdAt  DateTime     @default(now())
+  updatedAt  DateTime     @updatedAt
+  participants TicketParticipant[]
+  messages   TicketMessage[]
+  @@index([guildId, status])
+  @@index([customerId, status])
+}
+
+model TicketParticipant {
+  id        String   @id @default(cuid())
+  ticketId  String
+  ticket    Ticket   @relation(fields: [ticketId], references: [id])
+  discordId String
+  addedByDiscordId String?
+  createdAt DateTime @default(now())
+  @@unique([ticketId, discordId])
+}
+
+// Transcript: เก็บเมื่อปิด Ticket เข้าถึงได้เฉพาะผู้มีสิทธิ์
+model TicketMessage {
+  id        String   @id @default(cuid())
+  ticketId  String
+  ticket    Ticket   @relation(fields: [ticketId], references: [id])
+  authorDiscordId String
+  authorName String
+  content   String
+  sentAt    DateTime
+  @@index([ticketId, sentAt])
+}
+
+model Payment {
+  id          String        @id @default(cuid())
+  orderId     String
+  order       Order         @relation(fields: [orderId], references: [id])
+  customerId  String
+  customer    User          @relation(fields: [customerId], references: [id])
+  amountSatang Int
+  status      PaymentStatus @default(PENDING_VERIFICATION)
+  proofUrl    String?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  verifications PaymentVerification[]
+  @@index([orderId])
+}
+
+model PaymentVerification {
+  id          String        @id @default(cuid())
+  paymentId   String
+  payment     Payment       @relation(fields: [paymentId], references: [id])
+  verifierDiscordId String
+  fromStatus  PaymentStatus
+  toStatus    PaymentStatus
+  note        String?
+  createdAt   DateTime      @default(now())
+}
+
+model Review {
+  id         String   @id @default(cuid())
+  guildId    String
+  guild      Guild    @relation(fields: [guildId], references: [id])
+  orderId    String   @unique // 1 ออเดอร์ รีวิวได้ครั้งเดียว
+  order      Order    @relation(fields: [orderId], references: [id])
+  customerId String
+  customer   User     @relation(fields: [customerId], references: [id])
+  rating     Int      // 1-5 (ตรวจใน Service)
+  comment    String?
+  hidden     Boolean  @default(false)
+  hiddenReason String?
+  hiddenByDiscordId String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  @@index([guildId, hidden])
+}
+
+model ModerationCase {
+  id        String    @id @default(cuid())
+  caseNo    Int       @default(autoincrement())
+  guildId   String
+  guild     Guild     @relation(fields: [guildId], references: [id])
+  action    ModAction
+  targetDiscordId String
+  moderatorDiscordId String
+  reason    String
+  expiresAt DateTime?
+  createdAt DateTime  @default(now())
+  @@index([guildId, targetDiscordId])
+}
+
+model Warning {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  guildDiscordId String
+  moderatorDiscordId String
+  reason    String
+  createdAt DateTime @default(now())
+  deletedAt DateTime?
+  @@index([guildDiscordId, userId])
+}
+
+model WelcomeSettings {
+  id        String   @id @default(cuid())
+  guildId   String   @unique
+  guild     Guild    @relation(fields: [guildId], references: [id])
+  enabled   Boolean  @default(false)
+  channelId String?
+  message   String   @default("ยินดีต้อนรับ {user} สู่ {server} คุณคือสมาชิกคนที่ {memberCount}")
+  embedColor Int?
+  thumbnailUrl String?
+  imageUrl  String?
+  updatedAt DateTime @updatedAt
+}
+
+model RolePanel {
+  id        String   @id @default(cuid())
+  guildId   String
+  guild     Guild    @relation(fields: [guildId], references: [id])
+  channelId String?
+  messageId String?
+  title     String
+  mode      String   @default("BUTTON") // BUTTON | SELECT
+  roleIds   String[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model EmbedTemplate {
+  id        String   @id @default(cuid())
+  guildId   String
+  guild     Guild    @relation(fields: [guildId], references: [id])
+  name      String
+  data      Json
+  createdByDiscordId String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  deletedAt DateTime?
+  @@unique([guildId, name])
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  title     String
+  body      String
+  readAt    DateTime?
+  createdAt DateTime @default(now())
+  @@index([userId, readAt])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  guildId   String
+  guild     Guild    @relation(fields: [guildId], references: [id])
+  actorDiscordId String
+  action    String
+  entity    String
+  entityId  String?
+  before    Json?
+  after     Json?
+  createdAt DateTime @default(now())
+  @@index([guildId, createdAt])
+}
+
+// ข้อความระหว่างลูกค้ากับทีมงานในแต่ละออเดอร์ (ใช้แทนห้อง Ticket)
+model OrderMessage {
+  id        String   @id @default(cuid())
+  orderId   String
+  order     Order    @relation(fields: [orderId], references: [id])
+  authorDiscordId String
+  authorName String
+  isStaff   Boolean  @default(false)
+  content   String
+  createdAt DateTime @default(now())
+  @@index([orderId, createdAt])
+}
