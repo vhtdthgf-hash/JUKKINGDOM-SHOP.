@@ -1,0 +1,17 @@
+{
+  "name": "jukkingdom-web",
+  "version": "1.0.0",
+  "private": true,
+  "engines": { "node": ">=20" },
+  "prisma": { "schema": "schema.prisma" },
+  "scripts": {
+    "postinstall": "prisma generate && (prisma db push --skip-generate || echo db-push-skipped)"
+  },
+  "dependencies": {
+    "@prisma/client": "^5.22.0",
+    "prisma": "^5.22.0",
+    "express": "^5.1.0",
+    "zod": "^3.23.8",
+    "pino": "^9.5.0"
+  }
+}
